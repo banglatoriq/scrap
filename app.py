@@ -1,7 +1,5 @@
 """
-Doctor Bangladesh Scraper — Optimized Streamlit App
-===================================================
-Run with:  streamlit run app.py
+Doctor Bangladesh Scraper — Calibrated to your CSV Structure
 """
 
 import csv
@@ -10,11 +8,116 @@ import re
 import time
 import concurrent.futures
 from datetime import datetime
-
 import requests
 from bs4 import BeautifulSoup
 import streamlit as st
 
+# ── Configuration Constants (Matched to your CSV) ──────────────────────────────
+CSV_COLUMNS = [
+    'Title', 'Content', 'Excerpt', 'Ad Type', 'Categories', 'Locations', 'Tags', 
+    'Images', 'Video URL', 'Post Date', 'Post Author ID', 'Author First name', 
+    'Author Last name', 'Author Email', 'Author Username', 'Pricing Type', 
+    'Price Type', 'Price', 'Max Price', 'Social Profiles', 'Website', 'Email', 
+    'Phone', 'WhatsApp', 'Address', 'Zip Code', 'Map Latitude', 'Map Longitude', 
+    'Hide Map', 'Never Expire', 'Expiry Date', 'Views', 'Business Hours', 'Status', 
+    'radio_axdl9k6wlb', 'text_j456myldo8', 'text_mu65ovg87y', 'text_we3ui010yl', 
+    'text_10vmr6dbji6', 'textarea_155974l42hu', 'text_1wiw01ojiux', 
+    'text_2031eyb4gd7', 'text_mp3lyhty'
+]
+
+# Mapping dictionary for Categories - ensure these slugs exist in your WP taxonomy
+SPECIALTY_MAP = {
+    "ent": "ent", "ear nose throat": "ent", "otolaryngologist": "ent",
+    "cardiologist": "cardiology", "cardiology": "cardiology",
+    "medicine": "medicine", "internal medicine": "medicine",
+    "dermatologist": "dermatology", "dermatology": "dermatology",
+    "orthopedic": "orthopedics", "gynecologist": "gynecology",
+    "gynecology": "gynecology", "pediatrician": "pediatrics",
+    "neurology": "neurology", "neurologist": "neurology",
+    "gastro": "gastroenterology", "urology": "urology",
+    "eye": "ophthalmology", "ophthalmology": "ophthalmology",
+    "psychiatry": "psychiatry", "diabetes": "endocrinology",
+    "kidney": "nephrology", "nephrology": "nephrology",
+    "liver": "hepatology", "pulmonology": "pulmonology",
+    "dentist": "dentistry", "surgeon": "surgery",
+    "physiotherapy": "physiotherapy"
+}
+
+# ── Scraping Helpers ──────────────────────────────────────────────────────────
+def make_session():
+    s = requests.Session()
+    s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"})
+    return s
+
+def fetch(session, url):
+    try:
+        r = session.get(url, timeout=15)
+        r.raise_for_status()
+        return BeautifulSoup(r.text, "html.parser")
+    except: return None
+
+def parse_doctor(session, url, city_slug, wp_config):
+    s = fetch(session, url)
+    if not s: return None
+
+    # Initialize empty row with all required columns
+    row = {col: "" for col in CSV_COLUMNS}
+    
+    # Static Fields
+    row.update({
+        "Post Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Post Author ID": wp_config["author_id"],
+        "Author Email": wp_config["author_email"],
+        "Author Username": wp_config["author_username"],
+        "Pricing Type": "price",
+        "Price Type": "regular",
+        "Never Expire": "1",
+        "Expiry Date": wp_config["expiry_date"],
+        "Status": "publish",
+        "Locations": city_slug,
+    })
+
+    # Scrape Title
+    h1 = s.find("h1")
+    name = h1.get_text().strip() if h1 else "Unknown Doctor"
+    row["Title"] = name
+
+    # Scrape Content/Bio
+    content = ""
+    article = s.find("article")
+    if article: content = str(article)
+    row["Content"] = content
+    row["Excerpt"] = name + " - Doctor Listing"
+
+    # Specific Fields (Targeting the IDs from your CSV)
+    # Attempting to find data from bullets/lists
+    page_text = s.get_text(" ", strip=True)
+    
+    # 1. Degrees
+    degrees = re.search(r"(MBBS|FCPS|MD|MS|FRCS|DLO|BDS)[\w\s,.]+", page_text, re.I)
+    if degrees: row["textarea_155974l42hu"] = degrees.group(0)
+
+    # 2. Designation / Hospital / Clinic
+    # Heuristic based parsing
+    row["text_j456myldo8"] = "Consultant" # Default
+    row["text_mu65ovg87y"] = "N/A"
+    
+    # 3. Phone/Address/Visiting Hours (Chamber extraction)
+    phone = re.search(r"(\+880\d{9,10}|01\d{9})", page_text)
+    if phone: row["Phone"] = phone.group(1)
+    
+    # 4. Map Gender
+    row["radio_axdl9k6wlb"] = "female" if any(x in name.lower() for x in ["dr. ms.", "mrs"]) else "male"
+    
+    # Categories (Logic)
+    spec_found = ""
+    for k in SPECIALTY_MAP:
+        if k in page_text.lower():
+            spec_found = SPECIALTY_MAP[k]
+            break
+    row["Categories"] = spec_found if spec_found else "general"
+
+    return row
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Doctor BD Scraper Pro",
