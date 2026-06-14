@@ -60,10 +60,9 @@ def parse_doctor(session, url, city_slug, wp_config):
     s = fetch(session, url)
     if not s: return None
 
-    # Initialize empty row with all required columns
     row = {col: "" for col in CSV_COLUMNS}
     
-    # Static Fields
+    # --- Default Static Setup ---
     row.update({
         "Post Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Post Author ID": wp_config["author_id"],
@@ -77,45 +76,51 @@ def parse_doctor(session, url, city_slug, wp_config):
         "Locations": city_slug,
     })
 
-    # Scrape Title
+    # 1. Title
     h1 = s.find("h1")
     name = h1.get_text().strip() if h1 else "Unknown Doctor"
     row["Title"] = name
 
-    # Scrape Content/Bio
-    content = ""
+    # 2. Extract Data using Label Mapping
+    # We look for all list items and try to match labels
+    profile_text = s.get_text(separator='|', strip=True)
+    
+    # Helper to find text after a label
+    def extract_field(label):
+        pattern = rf"{label}\s*[:\-]?\s*([^|]+)"
+        match = re.search(pattern, profile_text, re.IGNORECASE)
+        return match.group(1).strip() if match else ""
+
+    # Mapping website structure to your CSV custom fields
+    row["text_j456myldo8"] = extract_field("Designation") or extract_field("Designation:") # Designation
+    row["text_mu65ovg87y"] = extract_field("Hospital") or extract_field("Institute") # Hospital
+    row["text_1wiw01ojiux"] = extract_field("Department") # Department
+    row["textarea_155974l42hu"] = extract_field("Qualifications") or extract_field("Degree") # Qualifications
+    row["text_10vmr6dbji6"] = extract_field("BMDC") # BMDC
+    
+    # 3. Chamber Data
+    row["text_2031eyb4gd7"] = extract_field("Chamber") or extract_field("Clinic") # Chamber Name
+    row["text_we3ui010yl"] = extract_field("Address") # Chamber Address
+    row["text_mp3lyhty"] = extract_field("Visiting Hours") # Visiting Hours
+    
+    # 4. Phone Extraction
+    phone_match = re.search(r"(\+880\d{9,10}|01\d{9})", profile_text)
+    row["Phone"] = phone_match.group(1) if phone_match else ""
+
+    # 5. Content & Excerpt
     article = s.find("article")
-    if article: content = str(article)
-    row["Content"] = content
-    row["Excerpt"] = name + " - Doctor Listing"
+    row["Content"] = str(article) if article else f"<p>{name}</p>"
+    row["Excerpt"] = f"{name} - {row['text_j456myldo8']}"
 
-    # Specific Fields (Targeting the IDs from your CSV)
-    # Attempting to find data from bullets/lists
-    page_text = s.get_text(" ", strip=True)
-    
-    # 1. Degrees
-    degrees = re.search(r"(MBBS|FCPS|MD|MS|FRCS|DLO|BDS)[\w\s,.]+", page_text, re.I)
-    if degrees: row["textarea_155974l42hu"] = degrees.group(0)
-
-    # 2. Designation / Hospital / Clinic
-    # Heuristic based parsing
-    row["text_j456myldo8"] = "Consultant" # Default
-    row["text_mu65ovg87y"] = "N/A"
-    
-    # 3. Phone/Address/Visiting Hours (Chamber extraction)
-    phone = re.search(r"(\+880\d{9,10}|01\d{9})", page_text)
-    if phone: row["Phone"] = phone.group(1)
-    
-    # 4. Map Gender
-    row["radio_axdl9k6wlb"] = "female" if any(x in name.lower() for x in ["dr. ms.", "mrs"]) else "male"
-    
-    # Categories (Logic)
-    spec_found = ""
-    for k in SPECIALTY_MAP:
-        if k in page_text.lower():
-            spec_found = SPECIALTY_MAP[k]
+    # 6. Categories (Logic)
+    spec_text = (row["text_1wiw01ojiux"] + " " + row["Title"]).lower()
+    for k, slug in SPECIALTY_MAP.items():
+        if k in spec_text:
+            row["Categories"] = slug
             break
-    row["Categories"] = spec_found if spec_found else "general"
+    
+    # 7. Gender
+    row["radio_axdl9k6wlb"] = "female" if any(x in name.lower() for x in ["dr. ms.", "mrs", "dr. mrs"]) else "male"
 
     return row
 # ── Page Configuration ────────────────────────────────────────────────────────
